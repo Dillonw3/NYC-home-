@@ -1,47 +1,57 @@
 import streamlit as st
 import requests
-from datetime import datetime
-
-st.set_page_config(page_title="NYC Studio Finder", layout="centered")
-
-API_TOKEN = st.secrets["APIFY_TOKEN"]
-
-# StreetEasy Scraper Actor details
-ACTOR_ID = "memo23/apify-streeteasy-cheerio"
+import time
 
 st.title("NYC Studio Apartment Finder")
-st.markdown("Filtered live listings from StreetEasy via Apify API.")
 
-def fetch_listings(boroughs, price_min, price_max, move_in_start, move_in_end, laundry=True, pets=False, broker_fee=False):
-    # Construct Apify API query URL with filters
-    base_url = f"https://api.apify.com/v2/actor-tasks/{ACTOR_ID}/runs?token={API_TOKEN}&limit=1"
-    
-    # Here you might trigger a run or get last run results — Apify usage details depend on actor specifics
-    # For simplicity, we'll just assume results are available at a results URL
+def fetch_listings():
+ACTOR_TASK_ID = "memo23/apify-streeteasy-cheerio"
+APIFY_API_BASE = "https://api.apify.com/v2"
+token = st.secrets["APIFY_TOKEN"]
 
-    # NOTE: This part might need custom Apify task running and fetching JSON results.
-    # For a full production app, you might have to trigger the scraper run, wait, and then fetch output.
-    
-    st.warning("Live fetching is a complex process requiring API run trigger and polling; this is a placeholder.")
+# Trigger actor run
+run_response = requests.post(
+f"{APIFY_API_BASE}/actor-tasks/{ACTOR_TASK_ID}/runs",
+params={"token": token},
+json={"startUrls": ["https://streeteasy.com/for-rent/queens/studio?price_min=1500&price_max=2100"]}
+)
+run_response.raise_for_status()
+run_data = run_response.json()
+run_id = run_data["data"]["id"]
 
-    return []
+# Poll run status
+for _ in range(30): # max ~150 sec
+status_response = requests.get(
+f"{APIFY_API_BASE}/actor-runs/{run_id}",
+params={"token": token}
+)
+status_response.raise_for_status()
+status = status_response.json()["data"]["status"]
+if status in ["SUCCEEDED", "FAILED", "ABORTED"]:
+break
+time.sleep(5)
 
-def main():
-    boroughs = st.multiselect("Select boroughs", options=["Queens", "Upper Manhattan"], default=["Queens", "Upper Manhattan"])
-    price_min, price_max = st.slider("Price Range ($)", 1500, 2100, (1500, 2100))
-    move_in_start = st.date_input("Move-in start date", datetime(2025, 7, 1))
-    move_in_end = st.date_input("Move-in end date", datetime(2025, 7, 31))
-    laundry = st.checkbox("In-building laundry only", value=True)
-    pets = st.checkbox("Allow pets", value=False)
-    broker_fee = st.checkbox("Include broker fee listings", value=False)
+if status != "SUCCEEDED":
+st.error(f"Apify run failed with status: {status}")
+return []
 
-    if st.button("Search"):
-        listings = fetch_listings(boroughs, price_min, price_max, move_in_start, move_in_end, laundry, pets, broker_fee)
-        if not listings:
-            st.info("No listings found or live data fetching not implemented in this demo.")
-        else:
-            for listing in listings:
-                st.write(listing)
+# Fetch results
+results_response = requests.get(
+f"{APIFY_API_BASE}/actor-runs/{run_id}/dataset/items",
+params={"token": token, "clean": "true"}
+)
+results_response.raise_for_status()
+listings = results_response.json()
 
-if __name__ == "__main__":
-    main()
+return listings
+
+if st.button("Search"):
+with st.spinner("Fetching listings, please wait..."):
+listings = fetch_listings()
+if not listings:
+st.info("No listings found or an error occurred.")
+else:
+st.success(f"Found {len(listings)} listings!")
+for i, listing in enumerate(listings, 1):
+st.markdown(f"### Listing {i}")
+st.write(listing)
